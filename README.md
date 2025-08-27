@@ -106,6 +106,12 @@ logger:
 **Где смотреть:**
 **Настройки → Система → Журналы** — строки вида `custom_components.itag_bt...` и `homeassistant.components.bluetooth...`.
 
+**Если Home Assistant запущен в Docker:**
+
+```bash
+docker logs -f --tail=100 homeassistant
+```
+
 ### Что полезно видеть в логах
 
 * ADV обнаружен: `... ADV seen, scheduling connect`
@@ -145,6 +151,15 @@ custom_components/itag_bt/
 ```
 
 ---
+
+## Совместимость и тестирование
+
+* Проверено на **Raspberry Pi 4B** со встроенным Bluetooth (BlueZ) и Home Assistant Core в Docker (`network_mode: host`, `privileged: true`).
+* Типичные характеристики работы:
+
+  * Первое нажатие после сна может только «будить» брелок; подключение стартует по первому ADV и занимает \~0.5–2.0 с.
+  * Встроенный адаптер RPi4 выдерживает ограниченное число одновременных GATT‑соединений; стабильнее ≤2 активных сессий.
+  * На брелке **PALMEXX iTag** подтверждены: кнопка FFE1/notify, Immediate Alert 0x1802/2A06, Battery 0x180F/2A19. Параметр Link Loss 0x1803/2A06 у отдельных клонов может игнорироваться (писк при разрыве остаётся включённым аппаратно).
 
 ## Лицензия
 
