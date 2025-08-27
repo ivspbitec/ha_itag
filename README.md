@@ -1,7 +1,146 @@
-2025-08-27 07:53:37.608 DEBUG (MainThread) [homeassistant.components.bluetooth.manager] hci0 (AA:AA:AA:AA:AA:AA) [connectable]: <BluetoothServiceInfoBleak name=MJWSD05MMC address=A4:C1:38:00:1B:65 rssi=-79 manufacturer_data={} service_data={'0000fe95-0000-1000-8000-00805f9b34fb': b'HY2({NwSu\x14\xbbS\x1a\x06\x00\xa9\xe9\xb7\xec'} service_uuids=[] source=AA:AA:AA:AA:AA:AA connectable=True time=635.710571721 tx_power=None raw=None> match: set()
-2025-08-27 07:53:41.427 INFO (MainThread) [custom_components.xiaomi_miot.core.device.dmaker.fan.1c] Device updated: {'fan.fan.on': False, 'fan.on': False, 'fan.fan_level': 1, 'fan.mode': 'Sleep', 'only_info': False}
-2025-08-27 07:53:44.074 INFO (MainThread) [custom_components.xiaomi_miot.core.device.yeelink.light.mono6] Device updated: {'light.light.on': False, 'light.brightness': 2.5500000000000003, 'number.light.off_delay_time': 0, 'only_info': False}
-2025-08-27 07:53:44.309 DEBUG (MainThread) [homeassistant.components.bluetooth.manager] hci0 (AA:AA:AA:AA:AA:AA) [connectable]: <BluetoothServiceInfoBleak name=iTAG             address=FF:05:24:18:0D:CB rssi=-78 manufacturer_data={261: b'\xff\x05$\x18\r\xcbf\x02\x01\x03\x00'} service_data={} service_uuids=['00001802-0000-1000-8000-00805f9b34fb', '00001803-0000-1000-8000-00805f9b34fb', '00001804-0000-1000-8000-00805f9b34fb', '0000180f-0000-1000-8000-00805f9b34fb', '0000ffe0-0000-1000-8000-00805f9b34fb', '5833ff01-9b8b-5191-6142-22a4536ef123'] source=AA:AA:AA:AA:AA:AA connectable=True time=642.410485501 tx_power=None raw=None> match: set()
-2025-08-27 07:53:44.310 DEBUG (MainThread) [custom_components.itag_bt.coordinator] ITag[FF:05:24:18:0D:CB] ADV seen, scheduling connect
-2025-08-27 07:53:44.887 DEBUG (MainThread) [custom_components.itag_bt.coordinator] ITag[FF:05:24:18:0D:CB] connected + notify
-2025-08-27 07:53:44.889 DEBUG (MainThread) [custom_components.itag_bt.coordinator] ITag[FF:05:24:18:0D:CB] keepalive start
+# iTag BLE — кастомная интеграция для Home Assistant
+
+Интеграция для работы с BLE‑брелками семейства **iTag** (в т.ч. клоны вроде **PALMEXX iTag Key Finder**). Даёт кнопку, сирену и уровень батареи; поддерживает «мгновенное» подключение при появлении рекламы и авто‑переподключение.
+
+---
+
+## Возможности
+
+* **`binary_sensor`** — нажатие кнопки (сервис FFE0, характеристика **FFE1/notify**).
+* **`switch`** — управление писком (сервис **Immediate Alert 0x1802**, характеристика **0x2A06**: `0x02` — писк, `0x00` — тишина).
+* **`sensor`** — уровень батареи (сервис **Battery 0x180F**, характеристика **0x2A19**).
+* Пассивный **мониторинг BLE‑рекламы** выбранного MAC и **автоподключение** при первом ADV.
+* Подписка на уведомления **FFE1**; события коннекта/дисконнекта на шину HA.
+* Защита от ложного писка **Link Loss** (keepalive — периодическая запись `0x00` в 2A06).
+
+---
+
+## Требования
+
+* Home Assistant Core с включённой встроенной интеграцией **Bluetooth**.
+* Хост/контейнер с **BlueZ** и доступом к BLE‑адаптеру.
+
+  * Для Docker: `network_mode: host`, `privileged: true`.
+* Достаточно свободных GATT‑подключений на адаптере (не держите одновременно множество активных BLE‑сессий).
+
+---
+
+## Установка
+
+1. Скопируйте папку `custom_components/itag_bt` в каталог конфигурации Home Assistant:
+   `/config/custom_components/itag_bt/`
+   (например, `/home/homeassistant/.homeassistant/custom_components/itag_bt/`).
+2. Перезапустите Home Assistant.
+3. В интерфейсе: **Настройки → Устройства и службы → Добавить интеграцию → iTag BLE**.
+4. Укажите **MAC‑адрес** брелка в верхнем регистре (например, `FF:05:24:18:0D:CB`).
+
+> Интеграцию можно добавить несколько раз — по одному устройству на запись.
+
+---
+
+## Что появляется в HA
+
+* **Устройство**: `iTag <MAC>`
+* **Сущности**:
+
+  * `binary_sensor.iTag Button <MAC>` — мигает при нажатии.
+  * `switch.iTag Beep <MAC>` — включает/выключает писк.
+  * `sensor.iTag Battery` — процент заряда.
+
+Сущности имеют уникальные ID с суффиксом `_v2`.
+
+---
+
+## Как это работает
+
+* Интеграция регистрирует **пассивный слушатель рекламы** BLE. Как только видит ADV нужного **MAC**, запускает попытку GATT‑подключения (через Bluetooth Manager HA).
+* После соединения:
+
+  * подписывается на **FFE1** (кнопка);
+  * сбрасывает оповещение **2A06** в `0x00`, чтобы брелок не пищал при разрыве;
+  * периодически отправляет `2A06=0x00` как **keepalive**.
+* События на шине HA:
+
+  * Нажатие кнопки → `itag_bt_button_<MAC>`
+  * Коннект → `itag_bt_connected_<MAC>`
+  * Дисконнект → `itag_bt_disconnected_<MAC>`
+
+---
+
+## Поддерживаемые GATT UUID’ы
+
+* **Кнопка**: `0000FFE1-0000-1000-8000-00805F9B34FB` (notify), сервис `FFE0`.
+* **Сирена**: `00002A06-0000-1000-8000-00805F9B34FB` (write `0x00`/`0x02`), сервис `0x1802 Immediate Alert`.
+* **Батарея**: `00002A19-0000-1000-8000-00805F9B34FB` (read), сервис `0x180F Battery`.
+
+> Примечание: у большинства клонов iTag UUID одинаковые. У редких вариантов может отсутствовать Battery Service либо отличаться поведение `0x01/0x02` для Alert Level.
+
+---
+
+## Ограничения и нюансы
+
+* **Первое нажатие после сна** может уйти на пробуждение/подключение. Обычно реакция — со второго клика; при удачной рекламе — с первого.
+* Встроенный адаптер RPi4 стабильно держит **немного** одновременных GATT‑соединений. При переполнении — ошибки вида *“no connection slot”*.
+* iTag пищит при **разрыве** (Link Loss). Интеграция гасит его записью `2A06=0x00` после коннекта, но короткий писк при перезагрузке HA возможен.
+* Если используете сторонние BLE‑интеграции, убедитесь, что они **не удерживают** GATT с тем же брелком.
+
+---
+
+## Отладка
+
+### Включение подробного лога (пример `configuration.yaml`)
+
+```yaml
+logger:
+  default: info
+  logs:
+    custom_components.itag_bt: debug
+    homeassistant.components.bluetooth: debug
+```
+
+**Где смотреть:**
+**Настройки → Система → Журналы** — строки вида `custom_components.itag_bt...` и `homeassistant.components.bluetooth...`.
+
+### Что полезно видеть в логах
+
+* ADV обнаружен: `... ADV seen, scheduling connect`
+* Установка соединения: `... connected + notify`
+* Keepalive: `... keepalive start/stop`
+* Чтение батареи: `... battery -> <value>` (если включено в коде)
+
+---
+
+## FAQ
+
+**Почему при перезагрузке HA брелок может пикнуть?**
+При разрыве соединения iTag запускает Link Loss. Интеграция гасит его записью `2A06=0x00` после коннекта, но короткий писк в момент разрыва возможен.
+
+**Можно ли добиться мгновенной реакции всегда?**
+Только держа постоянный GATT‑коннект, что увеличивает расход батареи. Интеграция балансирует: подключается по первому ADV и держит связь с умеренным keepalive.
+
+**Как добавить второй брелок?**
+Добавьте интеграцию ещё раз и укажите второй MAC.
+
+**Почему «не хватает слотов» для коннекта?**
+BLE‑адаптер ограничен по одновременным GATT‑сессиям. Закройте лишние соединения, отключите интеграции, удерживающие GATT на том же адаптере, или добавьте BLE‑прокси/второй адаптер.
+
+---
+
+## Структура
+
+```
+custom_components/itag_bt/
+ ├─ __init__.py        # регистрация клиента, рекламный watcher, (un)load платформ
+ ├─ manifest.json      # метаданные интеграции
+ ├─ config_flow.py     # мастер добавления (ввод MAC)
+ ├─ coordinator.py     # BLE‑клиент: connect/notify/keepalive/события, beep(), read_battery()
+ ├─ binary_sensor.py   # кнопка: слушает события от coordinator
+ ├─ switch.py          # сирена: пишет в 2A06 (0x02 / 0x00)
+ └─ sensor.py          # батарея: читает 2A19
+```
+
+---
+
+## Лицензия
+
+MIT (или укажите свою).
