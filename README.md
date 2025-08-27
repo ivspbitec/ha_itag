@@ -6,19 +6,20 @@
 
 ## Возможности
 
-* **`binary_sensor`** — нажатие кнопки (сервис FFE0, характеристика **FFE1/notify**)
-* **`switch`** — управление писком (сервис **Immediate Alert 0x1802**, характеристика **0x2A06**: `0x02` — писк, `0x00` — тишина)
-* **`sensor`** — уровень батареи (сервис **Battery 0x180F**, характеристика **0x2A19**)
-* Пассивный **мониторинг BLE‑рекламы** выбранного MAC и **автоподключение** при первом ADV
-* Подписка на уведомления **FFE1**; события коннекта/дисконнекта на шину HA
-* Защита от ложного писка **Link Loss** (keepalive — периодическая запись `0x00` в 2A06)
+* **`binary_sensor`** — нажатие кнопки (сервис FFE0, характеристика **FFE1/notify**).
+* **`switch`** — управление писком (сервис **Immediate Alert 0x1802**, характеристика **0x2A06**: `0x02` — писк, `0x00` — тишина).
+* **`switch` (Link Alert)** — управление писком при потере связи (сервис **Link Loss 0x1803**, характеристика **0x2A06**: `0x00`/`0x01`/`0x02`). Записывается строго в 0x1803 с подтверждением (write-with-response) и проверкой чтением.
+* **`sensor`** — уровень батареи (сервис **Battery 0x180F**, характеристика **0x2A19**).
+* Пассивный **мониторинг BLE‑рекламы** выбранного MAC и **автоподключение** при первом ADV.
+* Подписка на уведомления **FFE1**; события коннекта/дисконнекта на шину HA.
+* Защита от ложного писка (keepalive — периодическая запись `0x00` в Immediate Alert **0x1802:2A06**).
 
 ---
 
 ## Требования
 
 * Home Assistant Core с включённой встроенной интеграцией **Bluetooth**.
-* Хост/контейнер с **BlueZ** и доступом к BLE‑адаптеру
+* Хост/контейнер с **BlueZ** и доступом к BLE‑адаптеру.
 
   * Для Docker: `network_mode: host`, `privileged: true`.
 * Достаточно свободных GATT‑подключений на адаптере (не держите одновременно множество активных BLE‑сессий).
@@ -45,6 +46,7 @@
 
   * `binary_sensor.iTag Button <MAC>` — мигает при нажатии.
   * `switch.iTag Beep <MAC>` — включает/выключает писк.
+  * `switch.iTag Link Alert <MAC>` — управляет писком при разрыве (Link Loss).
   * `sensor.iTag Battery` — процент заряда.
 
 Сущности имеют уникальные ID с суффиксом `_v2`.
@@ -58,7 +60,8 @@
 
   * подписывается на **FFE1** (кнопка);
   * сбрасывает оповещение **2A06** в `0x00`, чтобы брелок не пищал при разрыве;
-  * периодически отправляет `2A06=0x00` как **keepalive**.
+  * периодически отправляет `2A06=0x00` как **keepalive** (только для Immediate Alert 0x1802);
+  * применяет политику Link Loss строго к `0x1803:0x2A06` (write-with-response + readback), сам keepalive **не трогает Link Loss**.
 * События на шине HA:
 
   * Нажатие кнопки → `itag_bt_button_<MAC>`
@@ -70,7 +73,8 @@
 ## Поддерживаемые GATT UUID’ы
 
 * **Кнопка**: `0000FFE1-0000-1000-8000-00805F9B34FB` (notify), сервис `FFE0`.
-* **Сирена**: `00002A06-0000-1000-8000-00805F9B34FB` (write `0x00`/`0x02`), сервис `0x1802 Immediate Alert`.
+* **Сирена (немедленный писк)**: `00002A06-0000-1000-8000-00805F9B34FB` (write `0x00`/`0x02`), сервис `0x1802 Immediate Alert`.
+* **Link Loss (писк при разрыве)**: сервис `0x1803` / характеристика `0x2A06` — уровень `0x00`/`0x01`/`0x02`.
 * **Батарея**: `00002A19-0000-1000-8000-00805F9B34FB` (read), сервис `0x180F Battery`.
 
 > Примечание: у большинства клонов iTag UUID одинаковые. У редких вариантов может отсутствовать Battery Service либо отличаться поведение `0x01/0x02` для Alert Level.
@@ -81,7 +85,8 @@
 
 * **Первое нажатие после сна** может уйти на пробуждение/подключение. Обычно реакция — со второго клика; при удачной рекламе — с первого.
 * Встроенный адаптер RPi4 стабильно держит **немного** одновременных GATT‑соединений. При переполнении — ошибки вида *“no connection slot”*.
-* iTag пищит при **разрыве** (Link Loss). Интеграция гасит его записью `2A06=0x00` после коннекта, но короткий писк при перезагрузке HA возможен.
+* iTag пищит при **разрыве** (Link Loss). Интеграция гасит Immediate Alert `2A06=0x00` после коннекта, но короткий писк при перезагрузке HA возможен.
+* **Клоны:** у части iTag значение `0x1803:2A06` **игнорируется** — устройство пищит при разрыве независимо от уровня (особенность прошивки). В таких случаях переключатель *Link Alert* не влияет на поведение.
 * Если используете сторонние BLE‑интеграции, убедитесь, что они **не удерживают** GATT с тем же брелком.
 
 ---
@@ -135,7 +140,7 @@ custom_components/itag_bt/
  ├─ config_flow.py     # мастер добавления (ввод MAC)
  ├─ coordinator.py     # BLE‑клиент: connect/notify/keepalive/события, beep(), read_battery()
  ├─ binary_sensor.py   # кнопка: слушает события от coordinator
- ├─ switch.py          # сирена: пишет в 2A06 (0x02 / 0x00)
+ ├─ switch.py          # сирена: 0x1802:2A06 (0x02/0x00); Link Alert: 0x1803:2A06 (0x00/0x01/0x02)
  └─ sensor.py          # батарея: читает 2A19
 ```
 
@@ -143,4 +148,24 @@ custom_components/itag_bt/
 
 ## Лицензия
 
-MIT
+MIT License
+
+Copyright (c) 2025 iTag BLE contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the “Software”), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
