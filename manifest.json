@@ -1,0 +1,10 @@
+{
+  "domain": "itag_bt",
+  "name": "iTag BLE",
+  "version": "0.1.1",
+  "config_flow": true,
+  "codeowners": ["@you"],
+  "iot_class": "local_push",
+  "dependencies": ["bluetooth"],
+  "bluetooth": [{ "connectable": true }]
+}
