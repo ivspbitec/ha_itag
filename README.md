@@ -143,4 +143,4 @@ custom_components/itag_bt/
 
 ## Лицензия
 
-MIT (или укажите свою).
+MIT
